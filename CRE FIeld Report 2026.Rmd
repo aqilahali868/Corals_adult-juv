@@ -1,0 +1,698 @@
+---
+title: "CRE Field Report 2026"
+author: "Dr Peter Doll"
+date: "2026-11-03"
+output: html_document
+---
+R Version 4.6.2 // R Studio Version 2026.10.1.239 // RTools 4.5
+
+This R Markdown file includes the R code to generate (example) figures and analyses associated with the 2026 Coral Reef Ecology Field Report.
+
+A) Juvenile hard coral density     (Year x Zone + Site; negative binomial GLM) (best/selected models)
+B) Hard coral cover                (Year x Zone + Site; beta-binomial GLM)
+C) Juvenile soft coral density     (Year x Zone x Site; negative binomial GLM)
+D) Soft coral cover                (Year x Zone x Site; beta-binomial GLM)
+
+
+Packages
+```{r}
+#Install packages (only needs to be done once) 
+#only run this (or parts thereof) if packages need to be installed on your JCU/personal PC
+#don't install new packages (or update version of R) unless required
+install.packages(c("readr", "glmmTMB", "DHARMa", "car", "emmeans", "ggplot2"))
+```
+
+```{r}
+# Load packages (each time you start R)
+library(readr)      # Importing data (read_csv)
+library(glmmTMB)    # Fitting generalized linear models (GLMs)
+library(DHARMa)     # Checking model assumptions and diagnostics
+library(car)        # Performing Type III analysis of deviance (ANOVA)
+library(emmeans)    # Calculating estimated marginal means and post-hoc comparisons
+library(ggplot2)    # Creating figures
+```
+
+Data preparation
+```{r}
+# Import dataset
+# Save R Markdown file ("CRE FIeld Report 2026" - this file) and data file ("Data combined.csv") in the same folder before running this code.
+Orpheus_data <- read_csv("Data combined.csv")
+
+# View the dataset
+View(Orpheus_data)
+```
+
+```{r}
+Orpheus_data$Year <- as.factor(Orpheus_data$Year) #Year will be treated as categorical variables in our statistical models.
+Orpheus_data$Zone <- factor(Orpheus_data$Zone, levels = c("Flat", "Crest", "Slope")) #specify sensible order of Zones for outputs & figures
+```
+
+
+
+
+................................................................................
+
+A) Juvenile hard coral density
+
+Prepare juvenile hard coral data
+```{r}
+Juv_data <- subset(Orpheus_data, !is.na(`Standardised Juv Density`)) # Exclude transects with missing juvenile hard coral density
+Juv_data$Juv_density <- Juv_data$`Standardised Juv Density` # density (individuals per m2) for summary statistics and figure
+Juv_data$Juv_count <- Juv_data$`Juv_Total hard`             # Raw juvenile counts (individuals per 10m2) for model
+```
+
+Summary statistics (juvenile hard corals)
+```{r}
+# Calculate summary statistics for each Year, Site and Zone combination
+juv_groups <- split(Juv_data, interaction(Juv_data$Year, Juv_data$Site, Juv_data$Zone))
+
+juv_summary <- do.call(rbind, lapply(juv_groups, function(x) {
+  data.frame(Year = unique(x$Year), Site = unique(x$Site), Zone = unique(x$Zone),
+    n = nrow(x) ,                                                                   # Number of transects
+    zero_percent = round(mean(x$Juv_density == 0) * 100, 2),                        # Percentage of transects with no juveniles
+    mean = round(mean(x$Juv_density), 2), 
+    sd = round(sd(x$Juv_density), 4),                                           # standard deviation (SD) - variation among individual transects
+    se = round(sd(x$Juv_density) / sqrt(nrow(x)),4),                            # standard error(SE) - precision of the estimated mean
+    median = round(median(x$Juv_density), 2), 
+    min = round(min(x$Juv_density),2), 
+    max = round(max(x$Juv_density),2))}))
+
+print(juv_summary, row.names = FALSE)  #shows us all relevant summary statistics (e.g., same sizes, percentage of zeros, means, standard errors, etc.)
+```
+
+
+
+Model selection using AICc (general) - just need to run this general code so you can compare your candidate models later
+```{r}
+# Function to calculate corrected Akaike Information Criterion (AICc) - will be used for other models later
+AICc <- function(model) {
+  K <- attr(logLik(model), "df")
+  n <- nobs(model)
+  AIC(model) + (2 * K * (K + 1)) / (n - K - 1)}
+#AICc is used to compare candidate models and identify which model best balances goodness of fit with model complexity. It penalizes models with more parameters to reduce the risk of over fitting, while accounting for sample size.
+#Lower AICc values indicate stronger support, with differences between models (ΔAICc) and model weights helping quantify the relative support for each candidate model.
+```
+
+
+Model selection (juvenile hard corals)
+
+What is a Generalized Linear Model (GLM)? 
+used to examine how one or more explanatory variables influence a response variable. Unlike a standard linear model, a GLM can accommodate different types of response data, including counts and proportions.
+
+What distribution to use for juvenile hard coral data?
+using a negative-binomial distribution (nbinom2) because our response variable is the count of juvenile corals recorded per transect (density), which is often overdispersed (variance greater than the mean) and likely contains true zeros. The log link ensures predicted values are positive.
+
+We are interested in whether juvenile densities vary among years, reef zones, and/or sites. So, we fit five candidate models with different combinations of explanatory variables and interactions to identify which structure best explains variation in juvenile hard-coral density.
++ represents additive effects (no interaction).
+* includes both main effects and their interaction.
+
+The five models test different combinations of effects to assess whether relationships vary across years, sites and zones.
+```{r}
+# Fit candidate negative-binomial GLMs
+Juv_mod_A <- glmmTMB(Juv_count ~ Year + Zone + Site, data = Juv_data, family = nbinom2(link = "log"))
+Juv_mod_B <- glmmTMB(Juv_count ~ Year * Zone + Site, data = Juv_data, family = nbinom2(link = "log")) #most supported model
+Juv_mod_C <- glmmTMB(Juv_count ~ Year * Site + Zone, data = Juv_data, family = nbinom2(link = "log"))
+Juv_mod_D <- glmmTMB(Juv_count ~ Zone * Site + Year, data = Juv_data, family = nbinom2(link = "log"))
+Juv_mod_E <- glmmTMB(Juv_count ~ Year * Site * Zone, data = Juv_data, family = nbinom2(link = "log")) #includes interaction bet,Year * Zone 
+```
+
+```{r}
+# Compare juvenile hard-coral candidate models using AICc
+Juv_model_selection <- data.frame(Model = c("A", "B", "C", "D", "E"),
+  AICc = c(AICc(Juv_mod_A), AICc(Juv_mod_B), AICc(Juv_mod_C), AICc(Juv_mod_D), AICc(Juv_mod_E)))
+
+# Calculate Delta AICc and model weights
+Juv_model_selection$Delta_AICc <- Juv_model_selection$AICc - min(Juv_model_selection$AICc)
+Juv_model_selection$Weight <- exp(-0.5 * Juv_model_selection$Delta_AICc) /
+                              sum(exp(-0.5 * Juv_model_selection$Delta_AICc))
+
+# Rank models from lowest to highest AICc
+Juv_model_selection <- Juv_model_selection[order(Juv_model_selection$AICc), ]
+# Round weights to three decimal places
+Juv_model_selection$Weight <- round(Juv_model_selection$Weight, 3)
+# Display model comparison
+print(Juv_model_selection, row.names = FALSE)
+```
+Model B (Year × Zone + Site) was selected as the best-supported model, based on its lowest AICc (4981.10) and highest model weight (0.673), indicating the best balance between model fit and complexity.
+
+
+DHARMa
+Before proceeding with analysis, we check the selected model's assumptions and fit using DHARMa. 
+This involves simulating residuals and testing for potential problems with uniformity, dispersion and outliers.
+
+```{r}
+# Simulate residuals to assess model fit and assumptions
+Juv_res <- simulateResiduals(Juv_mod_B, n = 1000)  # Generate 1,000 simulated residual datasets.
+# Plot diagnostic results
+plot(Juv_res)  # Assess residual uniformity, dispersion and outliers
+```
+The DHARMa diagnostics indicate no significant departures from model assumptions, suggesting an adequate model fit. 
+Some quantile deviations, but much better fit overall than for alternative model structures and error distributions.
+Hence, we progress with this model.
+
+
+Analysis
+Next, assess the selected model using a Type III analysis of deviance to determine which explanatory variables and interactions significantly influence juvenile hard coral density.
+We use a likelihood-ratio chi-squared test to assess the significance of each model term.
+```{r}
+# Type III analysis of deviance for the selected model
+Anova(Juv_mod_B, type = 3)
+```
+Shows that Year, Zone and the Year × Zone interaction significantly influence juvenile hard coral density (all p < 0.001). 
+Site has no significant effect (p = 0.277).
+
+
+Because the Year × Zone interaction was significant, we now compare years within each zone to identify where juvenile hard-coral density differs between years. Tukey-adjustment accounts for multiple pairwise comparisons.
+Pairwise comparison
+```{r}
+# Calculate estimated marginal means for each Year within each Zone
+Juv_emm_year <- emmeans(Juv_mod_B, ~ Year | Zone)
+# Compare juvenile hard-coral density between years within each Zone
+pairs(Juv_emm_year, adjust = "tukey")
+```
+Juvenile hard-coral density declined between 2024 and 2025–2026 in the Crest and Flat zones, whereas it increased in the Slope zone. No significant differences were detected between 2025 and 2026 in any zone.
+The estimate represents the difference in predicted juvenile hard-coral density between two groups on the log scale. The sign indicates the direction of the difference, while the p-value indicates whether it is statistically significant.
+E.g., On the Reef Crest, juvenile coral density was significantly higher in 2024 than in 2025 (estimate = 0.99, z = 6.31, p < 0.0001) and 2026 (estimate = 0.75, z = 4.98, p < 0.0001)
+
+
+Next, compare zones within each year to determine which zones differ in juvenile hard-coral density.
+```{r}
+# Calculate estimated marginal means for each Zone within each Year
+Juv_emm_zone <- emmeans(Juv_mod_B, ~ Zone | Year)
+# Compare juvenile hard-coral density between zones within each Year
+pairs(Juv_emm_zone, adjust = "tukey")
+```
+Spatial differences in juvenile density were strongest in 2024, when density was higher in the Crest and Flat zones than on the Slope. 
+By 2025, only the Flat–Slope difference remained significant, and by 2026 no significant differences among zones were detected.
+
+
+
+
+Figure (juvenile hard corals)
+
+We plot juvenile hard coral density across years and zones (averaging across sites because Site had no significant effect in the selected model).
+```{r}
+Figure_Juvenile_density <- ggplot(Juv_data, aes(x = Year, y = Juv_density)) +
+  geom_jitter(aes(colour = Year), width = 0.10, alpha = 0.25, size = 1.3) +  # Raw transect-level observations
+  geom_boxplot(aes(fill = Year), width = 0.35, outlier.shape = NA,
+               alpha = 0.45, colour = "black", linewidth = 0.7, fatten = 2.5) +  # Distribution of observations
+  stat_summary(aes(group = 1), fun = mean, geom = "line", colour = "black", linewidth = 0.7) +  # Connect annual means
+  stat_summary(fun = mean, geom = "point", shape = 21, size = 4, fill = "white", colour = "black", stroke = 0.7) +  # Show annual means
+  facet_wrap(~Zone, nrow = 1, scales = "fixed") +  # Separate panels for each zone, with a shared y-axis
+  scale_fill_manual(values = c("2024" = "lightblue", "2025" = "orange", "2026" = "lightgreen")) +  # Set boxplot colours
+  scale_colour_manual(values = c("2024" = "lightblue", "2025" = "orange", "2026" = "lightgreen")) +  # Set point colours
+  scale_y_continuous(trans = "log1p", breaks = c(0, 1, 2, 5, 10)) +  # Log-transform y-axis while retaining zero values (for better visualization)
+  labs(x = "Year", y = expression("Juvenile hard coral density (ind. m  "^{-2}*")")) +
+  theme_classic() +
+  theme(strip.background = element_blank(), strip.text = element_text(face = "bold", size = 11),
+        axis.title = element_text(size = 12), axis.text = element_text(size = 10),
+        legend.position = "none", panel.spacing = unit(0.4, "lines"))
+
+# Display figure
+Figure_Juvenile_density
+```
+Boxplots illustrate the median, interquartile range & spread of density within each year, with transect-level observations (coloured points).
+White points indicate mean density, connected by lines to highlight changes between years. 
+Separate panels show the three zones, using the same y-axis scale to facilitate comparisons. 
+
+Note: Juvenile hard-coral density is expressed as individuals per m². The y-axis uses a log(1 + x) transformation to improve visualization of the data, given the high proportion of zero observations and variation in densities.
+
+
+```{r}
+# Export figure as a high-resolution PNG image (into working directory - same folder as R Markdown file)
+ggsave("Juvenile_hard_coral_density.png", plot = Figure_Juvenile_density,
+       width = 6.6, height = 3.8, units = "in", dpi = 300)
+```
+
+...............................................................................
+
+
+
+
+
+
+
+
+
+
+
+B) Hard coral cover (i.e., adults)
+
+Prepare hard coral cover data
+```{r}
+# Prepare hard-coral cover data 
+Hard_cover_data <- subset(Orpheus_data, !is.na(`No. points`) & !is.na(Sand))
+
+# Calculate total hard-coral counts - which are the points occupied by any hard corals (columns K–U)
+Hard_cover_data$Hard_coral_points <- rowSums(Hard_cover_data[, 11:21], na.rm = TRUE)
+
+# Calculate hard-coral cover as a proportion of surveyed 'available-habitat' points (excluding sand)
+Hard_cover_data$Hard_coral_cover <- Hard_cover_data$Hard_coral_points / (Hard_cover_data$`No. points` - Hard_cover_data$Sand)
+```
+
+
+Summary statistics (hard coral cover)
+```{r}
+# Calculate summary statistics for each Year, Site and Zone combination
+hard_groups <- split(Hard_cover_data, interaction(Hard_cover_data$Year, Hard_cover_data$Site, Hard_cover_data$Zone))
+
+hard_summary <- do.call(rbind, lapply(hard_groups, function(x) {
+  data.frame(Year = unique(x$Year), Site = unique(x$Site), Zone = unique(x$Zone),
+             n = nrow(x),
+             zero_percent = round(mean(x$Hard_coral_cover == 0) * 100, 1),
+             mean = round(mean(x$Hard_coral_cover), 4),
+             sd = round(sd(x$Hard_coral_cover), 4),
+             se = round(sd(x$Hard_coral_cover) / sqrt(nrow(x)), 4),
+             median = round(median(x$Hard_coral_cover), 4),
+             min = round(min(x$Hard_coral_cover), 4),
+             max = round(max(x$Hard_coral_cover), 4))}))
+# Display summary statistics
+print(hard_summary, row.names = FALSE)
+```
+
+
+
+Model selection (hard coral cover)
+
+Note: We have already explored different error distributions for hard coral cover with poorer AICc and/or unsatisfactory diagnostics.
+Here, we focus on comparing candidate beta-binomial models.
+Beta-binomial GLMs work well with proportional count data (e.g., % coral cover) while accounting for overdispersion.
+
+We'll fit the same five candidate model structures as before, allowing us to compare additive effects and interactions among Year, Zone and Site.
+```{r}
+# Fit candidate beta-binomial GLMs
+Hard_cover_mod_A <- glmmTMB(cbind(Hard_coral_points, `No. points` - Sand - Hard_coral_points) ~ Year + Zone + Site, data = Hard_cover_data, family = betabinomial(link = "logit"))
+Hard_cover_mod_B <- glmmTMB(cbind(Hard_coral_points, `No. points` - Sand - Hard_coral_points) ~ Year * Zone + Site, data = Hard_cover_data, family = betabinomial(link = "logit")) #most supported model 
+Hard_cover_mod_C <- glmmTMB(cbind(Hard_coral_points, `No. points` - Sand - Hard_coral_points) ~ Year * Site + Zone, data = Hard_cover_data, family = betabinomial(link = "logit"))
+Hard_cover_mod_D <- glmmTMB(cbind(Hard_coral_points, `No. points` - Sand - Hard_coral_points) ~ Zone * Site + Year, data = Hard_cover_data, family = betabinomial(link = "logit"))
+Hard_cover_mod_E <- glmmTMB(cbind(Hard_coral_points, `No. points` - Sand - Hard_coral_points) ~ Year * Site * Zone, data = Hard_cover_data, family = betabinomial(link = "logit")) #triple interaction, same as previous AICc model
+```
+
+
+```{r}
+# Compare candidate models using AICc
+hard_cover_models <- list(A = Hard_cover_mod_A, B = Hard_cover_mod_B, C = Hard_cover_mod_C, D = Hard_cover_mod_D, E = Hard_cover_mod_E)
+hard_cover_aicc <- data.frame(Model = names(hard_cover_models), AICc = sapply(hard_cover_models, AICc))
+hard_cover_aicc$Delta <- hard_cover_aicc$AICc - min(hard_cover_aicc$AICc)
+hard_cover_aicc$Weight <- exp(-0.5 * hard_cover_aicc$Delta) / sum(exp(-0.5 * hard_cover_aicc$Delta))
+hard_cover_aicc <- hard_cover_aicc[order(hard_cover_aicc$AICc), ]
+hard_cover_aicc$AICc <- round(hard_cover_aicc$AICc, 2)
+hard_cover_aicc$Delta <- round(hard_cover_aicc$Delta, 2)
+hard_cover_aicc$Weight <- round(hard_cover_aicc$Weight, 2)
+print(hard_cover_aicc, row.names = FALSE)
+```
+B (Year × Zone + Site) has the strongest support. 
+Models E (Year x Zone x Site) has comparable support (ΔAICc = 1.81) but is less parsimonious (more complex) & showed convergence issues.
+We hence use Model B for our analyses.
+
+
+DHARMa
+```{r}
+hard_cover_sim_B <- simulateResiduals(Hard_cover_mod_B)
+plot(hard_cover_sim_B) #looks good
+#The warning can be disregarded for this practical: we checked the model’s convergence code, convergence message and Hessian, all of which indicated a successful fit, and the model diagnostics did not identify any issues that would affect the results.
+```
+
+
+Analysis
+```{r}
+# Type III analysis of deviance for the selected model
+Anova(Hard_cover_mod_B, type = "III")
+```
+Significant effects of Year, Zone, and their interaction (Year x Zone); Site is not significant.
+
+
+Pairwise comparisons
+```{r}
+# Compare years within each zone
+Hard_cover_emm_year <- emmeans(Hard_cover_mod_B, ~ Year | Zone)
+pairs(Hard_cover_emm_year, adjust = "tukey")
+
+# Compare zones within each year
+Hard_cover_emm_zone <- emmeans(Hard_cover_mod_B, ~ Zone | Year)
+pairs(Hard_cover_emm_zone, adjust = "tukey")
+```
+
+
+
+
+Figure (hard coral cover)
+
+We plot hard coral cover across years and zones (averaging across sites because Site had no significant effect in the selected model).
+```{r}
+# Create hard-coral cover figure
+Figure_Hard_coral_cover <- ggplot(Hard_cover_data, aes(x = Year, y = Hard_coral_cover * 100)) +
+  geom_jitter(aes(colour = Year), width = 0.10, alpha = 0.25, size = 1.3) +
+  geom_boxplot(aes(fill = Year), width = 0.35, outlier.shape = NA,
+               alpha = 0.45, colour = "black", linewidth = 0.7, fatten = 2.5) +
+  stat_summary(aes(group = 1), fun = mean, geom = "line", colour = "black", linewidth = 0.7) +
+  stat_summary(fun = mean, geom = "point", shape = 21, size = 4, fill = "white", colour = "black", stroke = 0.7) +
+  facet_wrap(~ Zone, nrow = 1) +
+  scale_fill_manual(values = c("2024" = "lightblue", "2025" = "orange", "2026" = "lightgreen")) +
+  scale_colour_manual(values = c("2024" = "lightblue", "2025" = "orange", "2026" = "lightgreen")) +
+  scale_y_continuous(breaks = seq(0, 100, 20)) +
+  coord_cartesian(ylim = c(0, 100)) +
+  labs(x = "Year", y = "Hard coral cover (%)") +
+  theme_classic() +
+  theme(strip.background = element_blank(),
+        strip.text = element_text(face = "bold", size = 11),
+        axis.title = element_text(size = 12),
+        axis.text = element_text(size = 10),
+        legend.position = "none",
+        panel.spacing = unit(0.4, "lines"))
+
+Figure_Hard_coral_cover
+```
+
+```{r}
+ggsave("Hard_coral_cover.png", plot = Figure_Hard_coral_cover,
+       width = 6.6, height = 3.8, units = "in", dpi = 300)
+```
+
+
+
+
+
+
+
+
+
+..............................................................................
+
+
+C) Juvenile soft coral densities
+
+Juvenile soft corals were not recorded during the 2024 surveys; therefore, 2024 data were excluded from this analysis.
+
+```{r}
+# Prepare juvenile soft coral data
+Soft_data <- subset(Orpheus_data, Year != "2024" & !is.na(`Juv_Soft corals`)) #remove 2024 data (all zeros for soft coral juveniles, not recorded)
+Soft_data <- droplevels(Soft_data)
+
+Soft_data$Soft_count <- Soft_data$`Juv_Soft corals`
+Soft_data$Soft_density <- Soft_data$Soft_count / 10  # Standardized density (ind. m-2) for summary statistics and figure
+```
+
+
+```{r}
+# Calculate summary statistics for each Year, Site and Zone combination
+soft_groups <- split(Soft_data, interaction(Soft_data$Year, Soft_data$Site, Soft_data$Zone))
+
+soft_summary <- do.call(rbind, lapply(soft_groups, function(x) {
+  data.frame(Year = unique(x$Year), Site = unique(x$Site), Zone = unique(x$Zone),
+             n = nrow(x),
+             zero_percent = round(mean(x$Soft_density == 0) * 100, 2),
+             mean = round(mean(x$Soft_density), 4),
+             sd = round(sd(x$Soft_density), 4),
+             se = round(sd(x$Soft_density) / sqrt(nrow(x)), 4),
+             median = round(median(x$Soft_density), 4),
+             min = round(min(x$Soft_density), 4),
+             max = round(max(x$Soft_density), 4))}))
+# Display summary statistics
+print(soft_summary, row.names = FALSE)
+```
+
+Model selection (juvenile soft corals)
+As with juvenile hard corals, we'll model raw counts using a negative-binomial distribution. This accommodates overdispersed count data.
+
+```{r}
+# Fit candidate negative-binomial GLMs
+Soft_mod_A <- glmmTMB(Soft_count ~ Year + Zone + Site, data = Soft_data, family = nbinom2(link = "log"))
+Soft_mod_B <- glmmTMB(Soft_count ~ Year * Zone + Site, data = Soft_data, family = nbinom2(link = "log"))
+Soft_mod_C <- glmmTMB(Soft_count ~ Year * Site + Zone, data = Soft_data, family = nbinom2(link = "log"))
+Soft_mod_D <- glmmTMB(Soft_count ~ Zone * Site + Year, data = Soft_data, family = nbinom2(link = "log"))
+Soft_mod_E <- glmmTMB(Soft_count ~ Year * Site * Zone, data = Soft_data, family = nbinom2(link = "log")) #most supported model: Ltripe interaction 
+```
+
+```{r}
+# Compare candidate models using AICc
+Soft_model_selection <- data.frame(Model = c("A", "B", "C", "D", "E"),
+  AICc = c(AICc(Soft_mod_A), AICc(Soft_mod_B), AICc(Soft_mod_C), AICc(Soft_mod_D), AICc(Soft_mod_E)))
+
+# Calculate Delta AICc and model weights
+Soft_model_selection$Delta_AICc <- Soft_model_selection$AICc - min(Soft_model_selection$AICc)
+Soft_model_selection$Weight <- exp(-0.5 * Soft_model_selection$Delta_AICc) / sum(exp(-0.5 * Soft_model_selection$Delta_AICc))
+
+# Rank models and display results
+Soft_model_selection <- Soft_model_selection[order(Soft_model_selection$AICc), ]
+Soft_model_selection$Weight <- round(Soft_model_selection$Weight, 3)
+print(Soft_model_selection, row.names = FALSE)
+```
+Model E (Year × Site × Zone) is strongly supported.
+
+DHARMa
+```{r}
+Soft_res <- simulateResiduals(Soft_mod_E, n = 1000)
+plot(Soft_res) #looks great
+```
+
+Analysis
+```{r}
+# Type III analysis of deviance for the selected model
+Anova(Soft_mod_E, type = 3)
+```
+significant three-way interaction between Year, Site and Zone (use pairwise comp to make sense of the interactions: conc. at point on slope)
+no significant overall effects of Year, Site or Zone, nor significant two-way interactions. 
+temporal differences in juvenile soft-coral density vary depending on the combination of site and zone.
+
+```{r}
+# Compare years within each Site and Zone combination
+Soft_emm_year <- emmeans(Soft_mod_E, ~ Year | Site * Zone)
+pairs(Soft_emm_year, adjust = "tukey")
+```
+At the Point - Flat, juvenile soft-coral density was significantly higher in 2025 than in 2026 (estimate = 2.406, z = 3.546, p = 0.0004).
+
+```{r}
+# Compare zones within each Year and Site combination
+Soft_emm_zone <- emmeans(Soft_mod_E, ~ Zone | Year * Site)
+pairs(Soft_emm_zone, adjust = "tukey")
+```
+
+```{r}
+# Compare sites within each Year and Zone combination
+Soft_emm_site <- emmeans(Soft_mod_E, ~ Site | Year * Zone)
+pairs(Soft_emm_site, adjust = "tukey")
+```
+
+
+Figure (juvenile soft coral density)
+
+```{r}
+Figure_Soft_juvenile_density <- ggplot(Soft_data, aes(x = Year, y = Soft_density)) +
+  geom_jitter(aes(colour = Year), width = 0.10, alpha = 0.25, size = 1.3) +
+  geom_boxplot(aes(fill = Year), width = 0.35, outlier.shape = NA,
+               alpha = 0.45, colour = "black", linewidth = 0.7, fatten = 2.5) +
+  stat_summary(fun = mean, geom = "point", shape = 21, size = 4,
+               fill = "white", colour = "black", stroke = 0.7) +
+  facet_grid(Site ~ Zone, scales = "fixed") +
+  scale_fill_manual(values = c("2025" = "orange", "2026" = "lightgreen")) +
+  scale_colour_manual(values = c("2025" = "orange", "2026" = "lightgreen")) +
+  scale_y_sqrt(breaks = c(0, 0.1, 1, 2)) +
+  labs(x = "Year", y = expression("Juvenile soft coral density (ind. m  "^{-2}*")")) +
+  theme_classic() +
+  theme(strip.background = element_blank(),
+        strip.text = element_text(face = "bold", size = 11),
+        axis.title = element_text(size = 12),
+        axis.text = element_text(size = 10),
+        legend.position = "none",
+        panel.spacing = unit(0.4, "lines"))
+
+Figure_Soft_juvenile_density
+```
+Juvenile soft-coral density is expressed as individuals per m², calculated by dividing the number of juveniles recorded per 10 m² transect by 10. 
+The y-axis uses a square-root transformation to improve visualization of the data, given the high proportion of zero observations and the variation in densities. 
+Not the greatest boxplot figure (because highly zero-inflated, but consistently formatted and shows relatively high densities at Point - Slope.
+
+```{r}
+ggsave("Juvenile_soft_coral_density.png", plot = Figure_Soft_juvenile_density,
+       width = 6.6, height = 5.2, units = "in", dpi = 300)
+```
+
+
+
+..............................................................................
+
+
+
+
+
+
+
+
+
+
+D) Soft coral cover (i.e., adults)
+
+Soft-coral cover is calculated as the proportion of (non-sand) survey points occupied by soft corals (point-intercept transect data), 
+by dividing the number of points recording soft coral by the total number of points surveyed (No. points) for each transect.
+```{r}
+# Prepare soft-coral cover data
+Soft_cover_data <- subset(Orpheus_data, !is.na(`Soft coral`) & !is.na(`No. points`) & !is.na(Sand))
+
+# Calculate proportional soft-coral cover
+Soft_cover_data$Soft_coral_cover <- Soft_cover_data$`Soft coral` / (Soft_cover_data$`No. points` - Soft_cover_data$Sand)
+```
+
+
+```{r}
+# Calculate summary statistics for each Year, Site and Zone combination
+soft_cover_groups <- split(Soft_cover_data, interaction(Soft_cover_data$Year, Soft_cover_data$Site, Soft_cover_data$Zone))
+soft_cover_summary <- do.call(rbind, lapply(soft_cover_groups, function(x) {
+  data.frame(Year = unique(x$Year), Site = unique(x$Site), Zone = unique(x$Zone),
+             n = nrow(x), zero_percent = round(mean(x$Soft_coral_cover == 0) * 100, 2),
+             mean = round(mean(x$Soft_coral_cover), 4), sd = round(sd(x$Soft_coral_cover), 4),
+             se = round(sd(x$Soft_coral_cover) / sqrt(nrow(x)), 4), median = round(median(x$Soft_coral_cover), 4),
+             min = round(min(x$Soft_coral_cover), 4), max = round(max(x$Soft_coral_cover), 4))}))
+print(soft_cover_summary, row.names = FALSE)
+```
+
+Model selection (soft coral cover)
+
+```{r}
+# Fit candidate beta-binomial models
+mod_soft_A <- glmmTMB(cbind(`Soft coral`, `No. points` - Sand - `Soft coral`) ~ Year + Zone + Site, data = Soft_cover_data, family = betabinomial(link = "logit"))
+mod_soft_B <- glmmTMB(cbind(`Soft coral`, `No. points` - Sand - `Soft coral`) ~ Year * Zone + Site, data = Soft_cover_data, family = betabinomial(link = "logit"))
+mod_soft_C <- glmmTMB(cbind(`Soft coral`, `No. points` - Sand - `Soft coral`) ~ Year * Site + Zone, data = Soft_cover_data, family = betabinomial(link = "logit"))
+mod_soft_D <- glmmTMB(cbind(`Soft coral`, `No. points` - Sand - `Soft coral`) ~ Zone * Site + Year, data = Soft_cover_data, family = betabinomial(link = "logit"))
+mod_soft_E <- glmmTMB(cbind(`Soft coral`, `No. points` - Sand - `Soft coral`) ~ Year * Site * Zone, data = Soft_cover_data, family = betabinomial(link = "logit")) #most suppoted model 
+```
+
+
+
+```{r}
+# Compare candidate models using AICc
+soft_cover_models <- list(A = mod_soft_A, B = mod_soft_B, C = mod_soft_C, D = mod_soft_D, E = mod_soft_E)
+soft_cover_aicc <- data.frame(Model = names(soft_cover_models), AICc = sapply(soft_cover_models, AICc))
+soft_cover_aicc$Delta <- soft_cover_aicc$AICc - min(soft_cover_aicc$AICc)
+soft_cover_aicc$Weight <- exp(-0.5 * soft_cover_aicc$Delta) / sum(exp(-0.5 * soft_cover_aicc$Delta))
+soft_cover_aicc <- soft_cover_aicc[order(soft_cover_aicc$AICc), ]
+soft_cover_aicc[, 2:4] <- round(soft_cover_aicc[, 2:4], 2)
+print(soft_cover_aicc, row.names = FALSE)
+```
+Strong support for Model E (Year × Site × Zone)
+
+
+DHARMa
+```{r}
+# Check model diagnostics using DHARMa
+soft_cover_sim <- simulateResiduals(mod_soft_E)
+plot(soft_cover_sim)
+```
+
+```{r}
+# Test fixed effects using Type III ANOVA
+Anova(mod_soft_E, type = "III")
+```
+
+significant effects of Year, Zone, and all three interaction terms; need to retain Site in the post-hoc comparisons (and figure)
+
+```{r}
+# Compare years within each Site and Zone combination
+Soft_cover_emm_year <- emmeans(mod_soft_E, ~ Year | Site * Zone)
+pairs(Soft_cover_emm_year, adjust = "tukey")
+
+# Compare zones within each Year and Site combination
+Soft_cover_emm_zone <- emmeans(mod_soft_E, ~ Zone | Year * Site)
+pairs(Soft_cover_emm_zone, adjust = "tukey")
+
+# Compare sites within each Year and Zone combination
+Soft_cover_emm_site <- emmeans(mod_soft_E, ~ Site | Year * Zone)
+pairs(Soft_cover_emm_site, adjust = "tukey")
+```
+
+
+Figure (soft coral data)
+
+```{r}
+Figure_Soft_coral_cover <- ggplot(Soft_cover_data, aes(x = Year, y = Soft_coral_cover * 100)) +
+  geom_jitter(aes(colour = Year), width = 0.10, alpha = 0.25, size = 1.3) +
+  geom_boxplot(aes(fill = Year), width = 0.35, outlier.shape = NA,
+               alpha = 0.45, colour = "black", linewidth = 0.7, fatten = 2.5) +
+  stat_summary(aes(group = 1), fun = mean, geom = "line", colour = "black", linewidth = 0.7) +
+  stat_summary(fun = mean, geom = "point", shape = 21, size = 4, fill = "white", colour = "black", stroke = 0.7) +
+  facet_grid(Site ~ Zone) +
+  scale_fill_manual(values = c("2024" = "lightblue", "2025" = "orange", "2026" = "lightgreen")) +
+  scale_colour_manual(values = c("2024" = "lightblue", "2025" = "orange", "2026" = "lightgreen")) +
+  scale_y_sqrt(breaks = c(0, 2, 10, 25, 50)) +
+  labs(x = "Year", y = "Soft coral cover (%)") +
+  theme_classic() +
+  theme(strip.background = element_blank(), strip.text = element_text(face = "bold", size = 11),
+        axis.title = element_text(size = 12), axis.text = element_text(size = 10),
+        legend.position = "none", panel.spacing = unit(0.4, "lines"))
+Figure_Soft_coral_cover
+```
+The y-axis uses a square-root transformation to improve visualization of the data, given the high proportion of zeros.
+
+
+```{r}
+ggsave("Soft_coral_cover.png", plot = Figure_Soft_coral_cover,
+       width = 6.6, height = 5.2, units = "in", dpi = 300)
+```
+
+
+
+
+
+
+..............................................................................
+
+Extra figures showing Juvenile hard coral densities and Hard coral cover across two sampling sites
+--> you can clearly see there is no difference between two sites
+--> hence they do not show you anything more than the simpler figures provided above
+--> you are not required to include these in your report, but acceptable in case you feel strongly about consistent formatting
+--> Do not include two figures showing the same patterns
+
+juvenile hard coral density - including Sites
+```{r}
+# Create juvenile hard-coral density figure
+FigureB_Juvenile_hard_density <- ggplot(Juv_data, aes(x = Year, y = Juv_density)) +
+  geom_jitter(aes(colour = Year), width = 0.10, alpha = 0.25, size = 1.3) +
+  geom_boxplot(aes(fill = Year), width = 0.35, outlier.shape = NA,
+               alpha = 0.45, colour = "black", linewidth = 0.7, fatten = 2.5) +
+  stat_summary(aes(group = 1), fun = mean, geom = "line", colour = "black", linewidth = 0.7) +
+  stat_summary(fun = mean, geom = "point", shape = 21, size = 4, fill = "white", colour = "black", stroke = 0.7) +
+  facet_grid(Site ~ Zone) +
+  scale_fill_manual(values = c("2024" = "lightblue", "2025" = "orange", "2026" = "lightgreen")) +
+  scale_colour_manual(values = c("2024" = "lightblue", "2025" = "orange", "2026" = "lightgreen")) +
+  scale_y_continuous(trans = "log1p") +
+  labs(x = "Year", y = expression("Juvenile hard-coral density (ind. m"^{-2}*")")) +
+  theme_classic() +
+  theme(strip.background = element_blank(), strip.text = element_text(face = "bold", size = 11),
+        axis.title = element_text(size = 12), axis.text = element_text(size = 10),
+        legend.position = "none", panel.spacing = unit(0.4, "lines"))
+FigureB_Juvenile_hard_density
+```
+
+
+hard coral cover - including Sites
+```{r}
+FigureC_Hard_coral_cover_Sites <- ggplot(Hard_cover_data, aes(x = Year, y = Hard_coral_cover * 100)) +
+  geom_jitter(aes(colour = Year), width = 0.10, alpha = 0.25, size = 1.3) +
+  geom_boxplot(aes(fill = Year), width = 0.35, outlier.shape = NA,
+               alpha = 0.45, colour = "black", linewidth = 0.7, fatten = 2.5) +
+  stat_summary(aes(group = 1), fun = mean, geom = "line", colour = "black", linewidth = 0.7) +
+  stat_summary(fun = mean, geom = "point", shape = 21, size = 4, fill = "white", colour = "black", stroke = 0.7) +
+  facet_grid(Site ~ Zone) +
+  scale_fill_manual(values = c("2024" = "lightblue", "2025" = "orange", "2026" = "lightgreen")) +
+  scale_colour_manual(values = c("2024" = "lightblue", "2025" = "orange", "2026" = "lightgreen")) +
+  scale_y_continuous(breaks = seq(0, 100, 20)) +
+  coord_cartesian(ylim = c(0, 100)) +
+  labs(x = "Year", y = "Hard coral cover (%)") +
+  theme_classic() +
+  theme(strip.background = element_blank(), strip.text = element_text(face = "bold", size = 11),
+        axis.title = element_text(size = 12), axis.text = element_text(size = 10),
+        legend.position = "none", panel.spacing = unit(0.4, "lines"))
+
+FigureC_Hard_coral_cover_Sites
+```
+
+```{r}
+par(mfrow = c(2,2))
+Figure_Hard_coral_cover
+Figure_Juvenile_density
+FigureB_Juvenile_hard_density
+Figure_Soft_coral_cover
+```
+
+
+
