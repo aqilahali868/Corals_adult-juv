@@ -15,11 +15,11 @@ D) Soft coral cover                (Year x Zone x Site; beta-binomial GLM)
 
 
 Packages
-```{r}
+```{bash}
 #Install packages (only needs to be done once) 
 #only run this (or parts thereof) if packages need to be installed on your JCU/personal PC
 #don't install new packages (or update version of R) unless required
-install.packages(c("readr", "glmmTMB", "DHARMa", "car", "emmeans", "ggplot2"))
+# install.packages(c("readr", "glmmTMB", "DHARMa", "car", "emmeans", "ggplot2"))
 ```
 
 ```{r}
@@ -554,7 +554,7 @@ mod_soft_A <- glmmTMB(cbind(`Soft coral`, `No. points` - Sand - `Soft coral`) ~ 
 mod_soft_B <- glmmTMB(cbind(`Soft coral`, `No. points` - Sand - `Soft coral`) ~ Year * Zone + Site, data = Soft_cover_data, family = betabinomial(link = "logit"))
 mod_soft_C <- glmmTMB(cbind(`Soft coral`, `No. points` - Sand - `Soft coral`) ~ Year * Site + Zone, data = Soft_cover_data, family = betabinomial(link = "logit"))
 mod_soft_D <- glmmTMB(cbind(`Soft coral`, `No. points` - Sand - `Soft coral`) ~ Zone * Site + Year, data = Soft_cover_data, family = betabinomial(link = "logit"))
-mod_soft_E <- glmmTMB(cbind(`Soft coral`, `No. points` - Sand - `Soft coral`) ~ Year * Site * Zone, data = Soft_cover_data, family = betabinomial(link = "logit")) #most suppoted model 
+mod_soft_E <- glmmTMB(cbind(`Soft coral`, `No. points` - Sand - `Soft coral`) ~ Year * Site * Zone, data = Soft_cover_data, family = betabinomial(link = "logit")) #most supported model 
 ```
 
 
