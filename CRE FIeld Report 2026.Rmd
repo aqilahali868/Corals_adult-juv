@@ -633,7 +633,6 @@ ggsave("Soft_coral_cover.png", plot = Figure_Soft_coral_cover,
 
 
 
-
 ..............................................................................
 
 Extra figures showing Juvenile hard coral densities and Hard coral cover across two sampling sites
