@@ -35,7 +35,7 @@ library(ggplot2)    # Creating figures
 Data preparation
 ```{r}
 # Import dataset
-# Save R Markdown file ("CRE FIeld Report 2026" - this file) and data file ("Data combined.csv") in the same folder before running this code.
+# Save R Markdown file ("CRE Field Report 2026" - this file) and data file ("Data combined.csv") in the same folder before running this code.
 Orpheus_data <- read_csv("Data combined.csv")
 
 # View the dataset
